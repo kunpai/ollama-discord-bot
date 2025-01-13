@@ -14,7 +14,7 @@ intents.message_content = True  # Enable access to message content
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Supported models and their default behavior
-SUPPORTED_MODELS = ['chussu', 'kiwi']
+SUPPORTED_MODELS = ['chussu', 'kiwi', 'babloo']
 DEFAULT_MODEL = 'chussu'
 
 # A mapping to store model references for continued conversations
