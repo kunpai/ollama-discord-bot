@@ -13,56 +13,85 @@ intents.message_content = True  # Enable access to message content
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-@app_commands.command(name='ask', description='Ask a question to the Chussu model')
-async def ask(interaction: discord.Interaction, question: str):
+# Supported models and their default behavior
+SUPPORTED_MODELS = ['chussu', 'kiwi']
+DEFAULT_MODEL = 'chussu'
+
+# A mapping to store model references for continued conversations
+message_model_map = {}
+
+@app_commands.command(name='ask', description='Ask a question to the specified model')
+@app_commands.describe(
+    question='The question you want to ask',
+    model='The model to query'
+)
+@app_commands.choices(model=[
+    app_commands.Choice(name=model, value=model) for model in SUPPORTED_MODELS
+])
+async def ask(interaction: discord.Interaction, question: str, model: app_commands.Choice[str]):
     await interaction.response.defer()  # Acknowledge the interaction and defer the response
-    try:
-        # Query the Ollama model
-        response: ChatResponse = chat(model='chussu:latest', messages=[
-            {'role': 'user', 'content': question},
-        ])
-        # Send the response back to the Discord channel
-        await interaction.followup.send(response.message.content)
-    except Exception as e:
-        await interaction.followup.send(f"An error occurred: {e}")
+    await query_model(interaction.followup.send, question, model.value)
 
 bot.tree.add_command(ask)
 
-
 @bot.event
 async def on_message(message):
-    # Ignore messages sent by the bot itself to prevent infinite loops
     if message.author == bot.user:
         return
 
-    # Check if the message is a reply to another message
+    print(f"Received message: {message.content}")
+    # Parse mentions like "<@BOT_ID> chussu: What is the meaning of life?"
+    if bot.user.mention in message.content:
+        print("Mention detected")
+        content = message.content.replace(bot.user.mention, '').strip()
+        model, question = parse_model_and_question(content)
+        if question:  # Valid question extracted
+            await query_model(message.channel.send, question, model)
+        return
+
+    # Check if it's a reply to another bot message
     if message.reference and message.reference.message_id:
-        # Fetch the original message being replied to
+        print("Reply detected")
         original_message = await message.channel.fetch_message(message.reference.message_id)
+        print(f"Original message: {original_message.content}")
+        print(message_model_map)
+        if original_message.id in message_model_map:
+            model = message_model_map[original_message.id]
+            question = message.content.strip()
+            print(f"Model: {model}, Question: {question}")
+            await query_model(message.channel.send, question, model)
+            return
 
-        # Check if the original message was sent by the bot
-        if original_message.author == bot.user:
-            # Process the reply as a question to the model
-            question = message.content
-            await process_question(message.channel, question)
-    elif bot.user in message.mentions:
-        # Remove the bot mention from the message content to extract the question
-        question = message.content.replace(bot.user.mention, '').strip()
-        await process_question(message.channel, question)
-    else:
-        # Process regular messages or commands as needed
-        await bot.process_commands(message)
+    # Process commands if no special case applies
+    await bot.process_commands(message)
 
-async def process_question(channel, question):
+def parse_model_and_question(content):
+    """
+    Parses a message to extract the model and question.
+    - Format: "chussu: What is the meaning of life?"
+    - If no model is specified, defaults to DEFAULT_MODEL.
+    """
+    for model in SUPPORTED_MODELS:
+        if content.startswith(f"{model}:"):
+            question = content[len(f"{model}:"):].strip()
+            return model, question
+
+    # Default behavior if no model prefix is found
+    return DEFAULT_MODEL, content
+
+async def query_model(send_response, question, model):
+    """
+    Queries the specified model and sends the response to the given output method.
+    """
     try:
-        # Query the Ollama model
-        response: ChatResponse = chat(model='chussu:latest', messages=[
+        response: ChatResponse = chat(model=f'{model}:latest', messages=[
             {'role': 'user', 'content': question},
         ])
-        # Send the response back to the channel
-        await channel.send(response.message.content)
+        bot_message = await send_response(f"{model.title()}: {response.message.content}")
+        # Update the message_model_map with the bot's response message ID
+        message_model_map[bot_message.id] = model
     except Exception as e:
-        await channel.send(f"An error occurred: {e}")
+        await send_response(f"An error occurred: {e}")
 
 @bot.event
 async def on_ready():
